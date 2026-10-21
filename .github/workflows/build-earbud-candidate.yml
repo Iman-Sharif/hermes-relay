@@ -1,0 +1,64 @@
+name: Earbud Assistant APK - Issue 774
+
+on:
+  push:
+    branches:
+      - build/earbud-assistant-apk-774
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-candidate:
+    name: Build isolated sideload candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact build branch
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run assistant regression tests
+        run: ./gradlew :app:testSideloadDebugUnitTest --tests '*AssistantScreenContextTest*' --console=plain
+
+      - name: Build separately installable APK
+        env:
+          SOURCE_SHA: c494a997c4bb72137684a8a5e7c279a7c61123f6
+        run: |
+          ./gradlew :app:assembleSideloadCandidate \
+            -Pcandidate.kind=review \
+            '-Pcandidate.label=Earbud Assistant #774' \
+            -Pcandidate.sourceRef=fix/bluetooth-voice-command-assistant-774 \
+            -Pcandidate.sourceSha="$SOURCE_SHA" \
+            --console=plain
+
+      - name: Verify package identity and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/sideload/candidate/*.apk)
+          test "${#apks[@]}" -eq 1
+          aapt_bin="$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -1)"
+          "$aapt_bin" dump badging "${apks[0]}" | grep -F "package: name='com.axiomlabs.hermesrelay.sideload.candidate'"
+          mkdir -p candidate-artifacts
+          cp "${apks[0]}" candidate-artifacts/
+          sha256sum candidate-artifacts/*.apk > candidate-artifacts/SHA256SUMS.txt
+          printf 'PR: https://github.com/Codename-11/hermes-relay/pull/775\nSource: c494a997c4bb72137684a8a5e7c279a7c61123f6\nPackage: com.axiomlabs.hermesrelay.sideload.candidate\n' > candidate-artifacts/BUILD-INFO.txt
+
+      - name: Upload APK and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: hermes-earbud-candidate-774
+          path: candidate-artifacts/
+          if-no-files-found: error
+          retention-days: 7
